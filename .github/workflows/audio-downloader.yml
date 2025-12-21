@@ -1,0 +1,106 @@
+name: Download Audio Files from CSV
+
+on:
+  push:
+    paths:
+      - downloader.csv
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  download-audio:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests
+
+      - name: Process downloader.csv
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python << 'EOF'
+          import csv
+          import os
+          import requests
+          from urllib.parse import urlparse
+
+          REPO = os.environ["GITHUB_REPOSITORY"]
+          BRANCH = "main"
+
+          input_csv = "downloader.csv"
+          output_csv = "updated.csv"
+
+          rows = []
+
+          with open(input_csv, newline='', encoding='utf-8') as f:
+              reader = csv.DictReader(f)
+              for row in reader:
+                  rows.append(row)
+
+          updated_rows = []
+
+          for row in rows:
+              folder = row["folder_name"].strip().rstrip("/")
+              audio_name = row["audio_name"].strip()
+              audio_url = row["audio_url"].strip()
+
+              ext = os.path.splitext(urlparse(audio_url).path)[1]
+              if not ext:
+                  print(f"Skipping (no extension): {audio_url}")
+                  continue
+
+              os.makedirs(folder, exist_ok=True)
+
+              file_path = os.path.join(folder, audio_name + ext)
+
+              if not os.path.exists(file_path):
+                  print(f"Downloading: {audio_url}")
+                  r = requests.get(audio_url, timeout=60)
+                  r.raise_for_status()
+                  with open(file_path, "wb") as f:
+                      f.write(r.content)
+              else:
+                  print(f"Already exists: {file_path}")
+
+              github_raw_url = (
+                  f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/{file_path}"
+              )
+
+              cdnjs_url = (
+                  f"https://cdn.jsdelivr.net/gh/{REPO}@{BRANCH}/{file_path}"
+              )
+
+              updated_row = dict(row)
+              updated_row["github_audio_url"] = github_raw_url
+              updated_row["cdnjs_url"] = cdnjs_url
+
+              updated_rows.append(updated_row)
+
+          fieldnames = list(updated_rows[0].keys())
+
+          with open(output_csv, "w", newline="", encoding="utf-8") as f:
+              writer = csv.DictWriter(f, fieldnames=fieldnames)
+              writer.writeheader()
+              writer.writerows(updated_rows)
+
+          EOF
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add .
+          git diff --cached --quiet || git commit -m "Download new audio files and update CSV"
+          git push
