@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -23,10 +25,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: |
-          pip install requests
+        run: pip install requests
 
-      - name: Process downloader.csv
+      - name: Download audio files and generate updated.csv
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
@@ -39,14 +40,11 @@ jobs:
           REPO = os.environ["GITHUB_REPOSITORY"]
           BRANCH = "main"
 
-          input_csv = "downloader.csv"
-          output_csv = "updated.csv"
+          INPUT = "downloader.csv"
+          OUTPUT = "updated.csv"
 
-          rows = []
-
-          with open(input_csv, newline="", encoding="utf-8") as f:
-              reader = csv.DictReader(f)
-              rows = list(reader)
+          with open(INPUT, newline="", encoding="utf-8") as f:
+              rows = list(csv.DictReader(f))
 
           updated_rows = []
 
@@ -56,21 +54,18 @@ jobs:
               audio_url = row["audio_url"].strip()
 
               status = ""
-              github_raw_url = ""
-              cdnjs_url = ""
+              github_url = ""
+              cdn_url = ""
 
               try:
-                  parsed = urlparse(audio_url)
-                  ext = os.path.splitext(parsed.path)[1]
-
+                  ext = os.path.splitext(urlparse(audio_url).path)[1]
                   if not ext:
                       raise ValueError("missing file extension")
 
                   os.makedirs(folder, exist_ok=True)
-
                   file_path = os.path.join(folder, audio_name + ext)
 
-                  if os.path.exists(file_path):
+                  if os.path.isfile(file_path):
                       status = "already_exists"
                   else:
                       r = requests.get(audio_url, timeout=60)
@@ -79,36 +74,40 @@ jobs:
                           f.write(r.content)
                       status = "downloaded"
 
-                  github_raw_url = (
-                      f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/{file_path}"
-                  )
-                  cdnjs_url = (
-                      f"https://cdn.jsdelivr.net/gh/{REPO}@{BRANCH}/{file_path}"
-                  )
+                  github_url = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/{file_path}"
+                  cdn_url = f"https://cdn.jsdelivr.net/gh/{REPO}@{BRANCH}/{file_path}"
 
               except Exception as e:
-                  status = f"error: {str(e)}"
+                  status = f"error: {e}"
 
-              updated_row = dict(row)
-              updated_row["github_audio_url"] = github_raw_url
-              updated_row["cdnjs_url"] = cdnjs_url
-              updated_row["status"] = status
+              out = dict(row)
+              out["github_audio_url"] = github_url
+              out["cdnjs_url"] = cdn_url
+              out["status"] = status
+              updated_rows.append(out)
 
-              updated_rows.append(updated_row)
-
-          fieldnames = list(updated_rows[0].keys())
-
-          with open(output_csv, "w", newline="", encoding="utf-8") as f:
-              writer = csv.DictWriter(f, fieldnames=fieldnames)
+          with open(OUTPUT, "w", newline="", encoding="utf-8") as f:
+              writer = csv.DictWriter(f, fieldnames=updated_rows[0].keys())
               writer.writeheader()
               writer.writerows(updated_rows)
-
           EOF
 
-      - name: Commit and push changes
+      - name: Show downloaded files (debug)
+        run: |
+          echo "Downloaded files:"
+          find . -type f \( -name "*.mp3" -o -name "*.wav" -o -name "*.m4a" -o -name "*.ogg" \)
+
+      - name: Commit and push all files
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add .
-          git diff --cached --quiet || git commit -m "Download new audio files and update CSV with status"
-          git push
+
+          # Force git to notice new binary files
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Download audio files and update CSV"
+            git push
+          fi
