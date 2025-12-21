@@ -44,10 +44,9 @@ jobs:
 
           rows = []
 
-          with open(input_csv, newline='', encoding='utf-8') as f:
+          with open(input_csv, newline="", encoding="utf-8") as f:
               reader = csv.DictReader(f)
-              for row in reader:
-                  rows.append(row)
+              rows = list(reader)
 
           updated_rows = []
 
@@ -56,35 +55,44 @@ jobs:
               audio_name = row["audio_name"].strip()
               audio_url = row["audio_url"].strip()
 
-              ext = os.path.splitext(urlparse(audio_url).path)[1]
-              if not ext:
-                  print(f"Skipping (no extension): {audio_url}")
-                  continue
+              status = ""
+              github_raw_url = ""
+              cdnjs_url = ""
 
-              os.makedirs(folder, exist_ok=True)
+              try:
+                  parsed = urlparse(audio_url)
+                  ext = os.path.splitext(parsed.path)[1]
 
-              file_path = os.path.join(folder, audio_name + ext)
+                  if not ext:
+                      raise ValueError("missing file extension")
 
-              if not os.path.exists(file_path):
-                  print(f"Downloading: {audio_url}")
-                  r = requests.get(audio_url, timeout=60)
-                  r.raise_for_status()
-                  with open(file_path, "wb") as f:
-                      f.write(r.content)
-              else:
-                  print(f"Already exists: {file_path}")
+                  os.makedirs(folder, exist_ok=True)
 
-              github_raw_url = (
-                  f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/{file_path}"
-              )
+                  file_path = os.path.join(folder, audio_name + ext)
 
-              cdnjs_url = (
-                  f"https://cdn.jsdelivr.net/gh/{REPO}@{BRANCH}/{file_path}"
-              )
+                  if os.path.exists(file_path):
+                      status = "already_exists"
+                  else:
+                      r = requests.get(audio_url, timeout=60)
+                      r.raise_for_status()
+                      with open(file_path, "wb") as f:
+                          f.write(r.content)
+                      status = "downloaded"
+
+                  github_raw_url = (
+                      f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/{file_path}"
+                  )
+                  cdnjs_url = (
+                      f"https://cdn.jsdelivr.net/gh/{REPO}@{BRANCH}/{file_path}"
+                  )
+
+              except Exception as e:
+                  status = f"error: {str(e)}"
 
               updated_row = dict(row)
               updated_row["github_audio_url"] = github_raw_url
               updated_row["cdnjs_url"] = cdnjs_url
+              updated_row["status"] = status
 
               updated_rows.append(updated_row)
 
@@ -102,5 +110,5 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add .
-          git diff --cached --quiet || git commit -m "Download new audio files and update CSV"
+          git diff --cached --quiet || git commit -m "Download new audio files and update CSV with status"
           git push
