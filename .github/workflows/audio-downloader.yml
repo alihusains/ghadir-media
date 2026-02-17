@@ -113,6 +113,35 @@
 #           fi
 
 
+name: Download Audio Files from CSV
+
+on:
+  push:
+    paths:
+      - downloader.csv
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  download-audio:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
       - name: Download audio files and generate updated.csv
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -153,6 +182,7 @@
               status = ""
               github_url = ""
               cdn_url = ""
+              detected_content_type = ""
 
               try:
                   parsed = urlparse(audio_url)
@@ -167,9 +197,11 @@
                   # If no extension, infer from Content-Type header
                   if not ext:
                       content_type = r.headers.get("Content-Type", "").split(";")[0].strip()
+                      detected_content_type = content_type
                       ext = CONTENT_TYPE_EXTENSIONS.get(content_type, "")
                       if not ext:
-                          ext = ".bin"  # fallback if unknown type
+                          # Try to infer from URL path query or default to .bin
+                          ext = ".bin"
 
                   file_path = os.path.join(folder, audio_name + ext)
 
@@ -190,6 +222,7 @@
               out["github_audio_url"] = github_url
               out["cdnjs_url"] = cdn_url
               out["status"] = status
+              out["detected_content_type"] = detected_content_type
               updated_rows.append(out)
 
           with open(OUTPUT, "w", newline="", encoding="utf-8") as f:
@@ -197,3 +230,23 @@
               writer.writeheader()
               writer.writerows(updated_rows)
           EOF
+
+      - name: Show downloaded files (debug)
+        run: |
+          echo "Downloaded files:"
+          find . -type f \( -name "*.mp3" -o -name "*.wav" -o -name "*.m4a" -o -name "*.ogg" \)
+
+      - name: Commit and push all files
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          # Force git to notice new binary files
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Download audio files and update CSV"
+            git push
+          fi
