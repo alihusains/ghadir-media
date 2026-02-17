@@ -1,31 +1,117 @@
-name: Download Audio Files from CSV
+# name: Download Audio Files from CSV
 
-on:
-  push:
-    paths:
-      - downloader.csv
-  workflow_dispatch:
+# on:
+#   push:
+#     paths:
+#       - downloader.csv
+#   workflow_dispatch:
 
-permissions:
-  contents: write
+# permissions:
+#   contents: write
 
-jobs:
-  download-audio:
-    runs-on: ubuntu-latest
+# jobs:
+#   download-audio:
+#     runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+#     steps:
+#       - name: Checkout repository
+#         uses: actions/checkout@v4
+#         with:
+#           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+#       - name: Set up Python
+#         uses: actions/setup-python@v5
+#         with:
+#           python-version: "3.11"
 
-      - name: Install dependencies
-        run: pip install requests
+#       - name: Install dependencies
+#         run: pip install requests
+
+#       - name: Download audio files and generate updated.csv
+#         env:
+#           GITHUB_REPOSITORY: ${{ github.repository }}
+#         run: |
+#           python << 'EOF'
+#           import csv
+#           import os
+#           import requests
+#           from urllib.parse import urlparse
+
+#           REPO = os.environ["GITHUB_REPOSITORY"]
+#           BRANCH = "main"
+
+#           INPUT = "downloader.csv"
+#           OUTPUT = "updated.csv"
+
+#           with open(INPUT, newline="", encoding="utf-8") as f:
+#               rows = list(csv.DictReader(f))
+
+#           updated_rows = []
+
+#           for row in rows:
+#               folder = row["folder_name"].strip().rstrip("/")
+#               audio_name = row["audio_name"].strip()
+#               audio_url = row["audio_url"].strip()
+
+#               status = ""
+#               github_url = ""
+#               cdn_url = ""
+
+#               try:
+#                   ext = os.path.splitext(urlparse(audio_url).path)[1]
+#                   if not ext:
+#                       raise ValueError("missing file extension")
+
+#                   os.makedirs(folder, exist_ok=True)
+#                   file_path = os.path.join(folder, audio_name + ext)
+
+#                   if os.path.isfile(file_path):
+#                       status = "already_exists"
+#                   else:
+#                       r = requests.get(audio_url, timeout=60)
+#                       r.raise_for_status()
+#                       with open(file_path, "wb") as f:
+#                           f.write(r.content)
+#                       status = "downloaded"
+
+#                   github_url = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/{file_path}"
+#                   cdn_url = f"https://cdn.jsdelivr.net/gh/{REPO}@{BRANCH}/{file_path}"
+
+#               except Exception as e:
+#                   status = f"error: {e}"
+
+#               out = dict(row)
+#               out["github_audio_url"] = github_url
+#               out["cdnjs_url"] = cdn_url
+#               out["status"] = status
+#               updated_rows.append(out)
+
+#           with open(OUTPUT, "w", newline="", encoding="utf-8") as f:
+#               writer = csv.DictWriter(f, fieldnames=updated_rows[0].keys())
+#               writer.writeheader()
+#               writer.writerows(updated_rows)
+#           EOF
+
+#       - name: Show downloaded files (debug)
+#         run: |
+#           echo "Downloaded files:"
+#           find . -type f \( -name "*.mp3" -o -name "*.wav" -o -name "*.m4a" -o -name "*.ogg" \)
+
+#       - name: Commit and push all files
+#         run: |
+#           git config user.name "github-actions"
+#           git config user.email "github-actions@github.com"
+
+#           # Force git to notice new binary files
+#           git add -A
+
+#           if git diff --cached --quiet; then
+#             echo "No changes to commit"
+#           else
+#             git commit -m "Download audio files and update CSV"
+#             git push
+#           fi
+
 
       - name: Download audio files and generate updated.csv
         env:
@@ -43,6 +129,17 @@ jobs:
           INPUT = "downloader.csv"
           OUTPUT = "updated.csv"
 
+          # Mapping of common audio content types to file extensions
+          CONTENT_TYPE_EXTENSIONS = {
+              "audio/mpeg": ".mp3",
+              "audio/mp3": ".mp3",
+              "audio/wav": ".wav",
+              "audio/x-wav": ".wav",
+              "audio/ogg": ".ogg",
+              "audio/x-m4a": ".m4a",
+              "audio/mp4": ".m4a",
+          }
+
           with open(INPUT, newline="", encoding="utf-8") as f:
               rows = list(csv.DictReader(f))
 
@@ -58,18 +155,27 @@ jobs:
               cdn_url = ""
 
               try:
-                  ext = os.path.splitext(urlparse(audio_url).path)[1]
-                  if not ext:
-                      raise ValueError("missing file extension")
+                  parsed = urlparse(audio_url)
+                  ext = os.path.splitext(parsed.path)[1]
 
                   os.makedirs(folder, exist_ok=True)
+
+                  # Download file
+                  r = requests.get(audio_url, timeout=60)
+                  r.raise_for_status()
+
+                  # If no extension, infer from Content-Type header
+                  if not ext:
+                      content_type = r.headers.get("Content-Type", "").split(";")[0].strip()
+                      ext = CONTENT_TYPE_EXTENSIONS.get(content_type, "")
+                      if not ext:
+                          ext = ".bin"  # fallback if unknown type
+
                   file_path = os.path.join(folder, audio_name + ext)
 
                   if os.path.isfile(file_path):
                       status = "already_exists"
                   else:
-                      r = requests.get(audio_url, timeout=60)
-                      r.raise_for_status()
                       with open(file_path, "wb") as f:
                           f.write(r.content)
                       status = "downloaded"
@@ -91,23 +197,3 @@ jobs:
               writer.writeheader()
               writer.writerows(updated_rows)
           EOF
-
-      - name: Show downloaded files (debug)
-        run: |
-          echo "Downloaded files:"
-          find . -type f \( -name "*.mp3" -o -name "*.wav" -o -name "*.m4a" -o -name "*.ogg" \)
-
-      - name: Commit and push all files
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-
-          # Force git to notice new binary files
-          git add -A
-
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Download audio files and update CSV"
-            git push
-          fi
